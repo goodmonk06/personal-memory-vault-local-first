@@ -1,46 +1,70 @@
 import { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { MemoryRepository } from '../repositories/memory-repository';
-import { CreateMemoryItemRequest, UpdateMemoryItemRequest } from '../types';
+import {
+  createMemoryItemSchema,
+  updateMemoryItemSchema,
+  listMemoriesSchema,
+  changesSinceSchema,
+} from '../lib/validation';
+import { validateBody, validateQuery } from '../middleware/validation';
+import { NotFoundError } from '../lib/errors';
 
 const memoryRepo = new MemoryRepository();
 
+// ID param schema
+const idParamSchema = z.object({
+  id: z.string().uuid(),
+});
+
 export async function memoryRoutes(fastify: FastifyInstance) {
   // Create a memory item
-  fastify.post<{ Body: CreateMemoryItemRequest }>('/items', async (request, reply) => {
-    try {
-      const item = memoryRepo.create(request.body);
+  fastify.post(
+    '/items',
+    {
+      preHandler: validateBody(createMemoryItemSchema),
+    },
+    async (request, reply) => {
+      const item = memoryRepo.create(request.body as any);
       return reply.code(201).send(item);
-    } catch (error: any) {
-      return reply.code(400).send({ error: error.message });
     }
-  });
+  );
 
   // Get all memory items
-  fastify.get<{ Querystring: { limit?: number; offset?: number } }>('/items', async (request) => {
-    const { limit = 100, offset = 0 } = request.query;
-    const items = memoryRepo.findAll(limit, offset);
-    return { items, total: items.length };
-  });
+  fastify.get(
+    '/items',
+    {
+      preHandler: validateQuery(listMemoriesSchema),
+    },
+    async (request) => {
+      const { limit, offset } = request.query as any;
+      const items = memoryRepo.findAll(limit, offset);
+      return { items, total: items.length };
+    }
+  );
 
   // Get a specific memory item
-  fastify.get<{ Params: { id: string } }>('/items/:id', async (request, reply) => {
+  fastify.get<{ Params: { id: string } }>('/items/:id', async (request) => {
     const item = memoryRepo.findById(request.params.id);
 
     if (!item) {
-      return reply.code(404).send({ error: 'Memory item not found' });
+      throw new NotFoundError('Memory item', request.params.id);
     }
 
     return item;
   });
 
   // Update a memory item
-  fastify.patch<{ Params: { id: string }; Body: UpdateMemoryItemRequest }>(
+  fastify.patch<{ Params: { id: string } }>(
     '/items/:id',
-    async (request, reply) => {
-      const item = memoryRepo.update(request.params.id, request.body);
+    {
+      preHandler: validateBody(updateMemoryItemSchema),
+    },
+    async (request) => {
+      const item = memoryRepo.update(request.params.id, request.body as any);
 
       if (!item) {
-        return reply.code(404).send({ error: 'Memory item not found' });
+        throw new NotFoundError('Memory item', request.params.id);
       }
 
       return item;
@@ -52,22 +76,20 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     const deleted = memoryRepo.delete(request.params.id);
 
     if (!deleted) {
-      return reply.code(404).send({ error: 'Memory item not found' });
+      throw new NotFoundError('Memory item', request.params.id);
     }
 
     return reply.code(204).send();
   });
 
   // Get changes since a timestamp (for sync)
-  fastify.get<{ Querystring: { since: string; limit?: number } }>(
+  fastify.get(
     '/items/changes/since',
-    async (request, reply) => {
-      const { since, limit = 100 } = request.query;
-
-      if (!since) {
-        return reply.code(400).send({ error: 'since parameter is required' });
-      }
-
+    {
+      preHandler: validateQuery(changesSinceSchema),
+    },
+    async (request) => {
+      const { since, limit } = request.query as any;
       const items = memoryRepo.listChangesSince(since, limit);
       return { items, total: items.length };
     }
